@@ -517,7 +517,7 @@ void ELog(ERASER *e, char *name, ...)
 	va_end(args);
 }
 
-void SLog(CEDAR *c, char *name, ...)
+void SLogFunc(const char * file, const char * function, size_t line, CEDAR *c, char *name, ...)
 {
 	wchar_t buf[MAX_SIZE * 2];
 	va_list args;
@@ -591,11 +591,11 @@ void ALog(ADMIN *a, HUB *h, char *name, ...)
 	}
 	else
 	{
-		WriteHubLog(h, tmp);
+		WriteHubLog(h, tmp, "", "", 0);
 	}
 	va_end(args);
 }
-void HLog(HUB *h, char *name, ...)
+void HLogFunc(const char * file, const char * function, size_t line, HUB *h, char *name, ...)
 {
 	wchar_t buf[MAX_SIZE * 2];
 	va_list args;
@@ -608,7 +608,7 @@ void HLog(HUB *h, char *name, ...)
 	va_start(args, name);
 	UniFormatArgs(buf, sizeof(buf), _UU(name), args);
 
-	WriteHubLog(h, buf);
+	WriteHubLog(h, buf, file, function, line);
 	va_end(args);
 }
 void NLog(VH *v, char *name, ...)
@@ -626,7 +626,7 @@ void NLog(VH *v, char *name, ...)
 	Copy(buf, snat_prefix, sizeof(snat_prefix));
 	UniFormatArgs(&buf[11], sizeof(buf) - 12 * sizeof(wchar_t), _UU(name), args);
 
-	WriteHubLog(v->nat->SecureNAT->Hub, buf);
+	WriteHubLog(v->nat->SecureNAT->Hub, buf, "", "", 0);
 	va_end(args);
 }
 
@@ -750,7 +750,7 @@ void PPPLog(PPP_SESSION *p, char *name, ...)
 }
 
 // Save the security log of the HUB
-void WriteHubLog(HUB *h, wchar_t *str)
+void WriteHubLog(HUB *h, wchar_t *str, const char * file, const char * function, size_t line)
 {
 	wchar_t buf[MAX_SIZE * 2];
 	UINT syslog_status;
@@ -920,9 +920,13 @@ bool PacketLog(HUB *hub, SESSION *src_session, SESSION *dest_session, PKT *packe
 	pl->Packet = p;
 	pl->NoLog = no_log;
 	pl->SrcSessionName = CopyStr(src_session->Name);
+	pl->SrcSessionProtocol = src_session->Connection->Protocol;
+	pl->SrcClientIP = src_session->ClientIP;
 	if (dest_session != NULL)
 	{
 		pl->DestSessionName = CopyStr(dest_session->Name);
+		pl->DestSessionProtocol = dest_session->Connection->Protocol;
+		pl->DestClientIP = dest_session->ClientIP;
 	}
 	else
 	{
@@ -1313,12 +1317,13 @@ char *PacketLogParseProc(RECORD *rec)
 		return NULL;
 	}
 
+
 	pl = (PACKET_LOG *)rec->Data;
 	p = pl->Packet;
 
 	// Generate each part
 	t = ZeroMalloc(sizeof(TOKEN_LIST));
-	t->NumTokens = 16;
+	t->NumTokens = 20;
 	if (pl->WritePhysicalIP)
 	{
 		t->NumTokens += 2;
@@ -1889,6 +1894,15 @@ char *PacketLogParseProc(RECORD *rec)
 		{
 			t->Token[17] = CopyStr(pl->DestPhysicalIP);
 		}
+
+		ToStr(tmp, pl->SrcSessionProtocol);
+		t->Token[18] = CopyStr(tmp);
+
+		ToStr(tmp, pl->DestSessionProtocol);
+		t->Token[19] = CopyStr(tmp);
+
+		t->Token[20] = CopyStr(pl->SrcClientIP);
+		t->Token[21] = CopyStr(pl->DestClientIP);
 	}
 	else
 	{

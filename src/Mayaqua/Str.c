@@ -2722,7 +2722,7 @@ void DebugArgs(char *fmt, va_list args)
 }
 
 // Display a debug string
-void Debug(char *fmt, ...)
+void DebugFunc(const char * file, const char * function, size_t line, char * fmt, ...)
 {
 	va_list args;
 	// Validate arguments

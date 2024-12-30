@@ -27,6 +27,8 @@ struct PACKET_LOG
 	struct PKT *Packet;
 	char *SrcSessionName;
 	char *DestSessionName;
+	UINT SrcSessionProtocol;
+	UINT DestSessionProtocol;
 	bool WritePhysicalIP;
 	char SrcPhysicalIP[64];
 	char DestPhysicalIP[64];
@@ -34,6 +36,8 @@ struct PACKET_LOG
 	bool PurePacketNoPayload;				// Packet not cloned (without payload)
 	SESSION *SrcSession;
 	bool NoLog;								// Not to write a log
+	const char * SrcClientIP;				// Client IP
+	const char * DestClientIP;				// Client IP
 };
 
 // Log save options of the HUB
@@ -131,9 +135,11 @@ char *PortStr(CEDAR *cedar, UINT port, bool udp);
 char *TcpFlagStr(UCHAR flag);
 void SiSetDefaultLogSetting(HUB_LOG *g);
 void DebugLog(CEDAR *c, char *fmt, ...);
-void SLog(CEDAR *c, char *name, ...);
-void WriteHubLog(HUB *h, wchar_t *str);
-void HLog(HUB *h, char *name, ...);
+#define SLog(c, name, ...) SLogFunc(__FILE__, __FUNCTION__, __LINE__, c, name __VA_OPT__(,) __VA_ARGS__)
+void SLogFunc(const char * file, const char * function, size_t line, CEDAR *c, char *name, ...);
+void WriteHubLog(HUB *h, wchar_t *str, const char * file, const char * function, size_t line);
+#define HLog(h, name, ...) HLogFunc(__FILE__, __FUNCTION__, __LINE__, h, name __VA_OPT__(,) __VA_ARGS__)
+void HLogFunc(const char * file, const char * function, size_t line, HUB *h, char *name, ...);
 void NLog(VH *v, char *name, ...);
 void PPPLog(PPP_SESSION *p, char *name, ...);
 void IPsecLog(IKE_SERVER *ike, IKE_CLIENT *c, IKE_SA *ike_sa, IPSECSA *ipsec_sa, char *name, ...);

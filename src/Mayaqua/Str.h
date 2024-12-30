@@ -46,7 +46,8 @@ void Format(char *buf, UINT size, char *fmt, ...);
 void Print(char *fmt, ...);
 void PrintArgs(char *fmt, va_list args);
 void PrintStr(char *str);
-void Debug(char *fmt, ...);
+#define Debug(format, ...) DebugFunc(__FILE__, __FUNCTION__, __LINE__, format __VA_OPT__(,) __VA_ARGS__)
+void DebugFunc(const char * file, const char * function, size_t line, char * fmt, ...);
 void DebugArgs(char *fmt, va_list args);
 UINT ToInt(char *str);
 bool ToBool(char *str);
