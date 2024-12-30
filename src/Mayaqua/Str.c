@@ -2818,7 +2818,7 @@ int StrCmpi(char *str1, char *str2)
 }
 
 // Compare the string
-int StrCmp(char *str1, char *str2)
+int StrCmp(const char *str1, const char *str2)
 {
 	// Validate arguments
 	if (str1 == NULL && str2 == NULL)

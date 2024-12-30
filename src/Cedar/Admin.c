@@ -4938,16 +4938,29 @@ UINT SiEnumIpTable(SERVER *s, char *hubname, RPC_ENUM_IP_TABLE *t)
 
 	LockList(h->IpTable);
 	{
-		t->NumIpTable = LIST_NUM(h->IpTable);
+		t->NumIpTable = 0;
+
+		for (i = 0;i < LIST_NUM(h->IpTable);i++)
+		{
+			IP_TABLE_ENTRY *table = LIST_DATA(h->IpTable, i);
+			t->NumIpTable += LIST_NUM(table->SessionGroup->SessionGroup);
+		}
+
 		t->IpTables = ZeroMalloc(sizeof(RPC_ENUM_IP_TABLE_ITEM) * t->NumIpTable);
 
+		UINT IpTableIndex = 0;
 		for (i = 0;i < t->NumIpTable;i++)
 		{
-			RPC_ENUM_IP_TABLE_ITEM *e = &t->IpTables[i];
 			IP_TABLE_ENTRY *table = LIST_DATA(h->IpTable, i);
+			RPC_ENUM_IP_TABLE_ITEM *e = &t->IpTables[IpTableIndex++];
+
+			for (UINT j = 0;j < LIST_NUM(table->SessionGroup->SessionGroup);j++)
+			{
+				SESSION *session = LIST_DATA(table->SessionGroup->SessionGroup, j);
+				StrCpy(e->SessionName, sizeof(e->SessionName), session->Name);
+			}
 
 			e->Key = POINTER_TO_KEY(table);
-			StrCpy(e->SessionName, sizeof(e->SessionName), table->Session->Name);
 			e->Ip = IPToUINT(&table->Ip);
 			Copy(&e->IpV6, &table->Ip, sizeof(IP));
 			Copy(&e->IpAddress, &table->Ip, sizeof(IP));
@@ -5112,22 +5125,35 @@ UINT SiEnumMacTable(SERVER *s, char *hubname, RPC_ENUM_MAC_TABLE *t)
 
 	LockHashList(h->MacHashTable);
 	{
-		MAC_TABLE_ENTRY **pp = (MAC_TABLE_ENTRY **)HashListToArray(h->MacHashTable, &t->NumMacTable);
+		UINT num;
+		MAC_TABLE_ENTRY **pp = (MAC_TABLE_ENTRY **)HashListToArray(h->MacHashTable, &num);
+		t->NumMacTable = 0;
+
+		for (i = 0;i < num;i++)
+		{
+			t->NumMacTable += LIST_NUM(pp[i]->SessionGroup->SessionGroup);
+		}
+
 		t->MacTables = ZeroMalloc(sizeof(RPC_ENUM_MAC_TABLE_ITEM) * t->NumMacTable);
 
-		for (i = 0;i < t->NumMacTable;i++)
+		UINT tIndex = 0;
+		for (i = 0;i < num;i++)
 		{
-			RPC_ENUM_MAC_TABLE_ITEM *e = &t->MacTables[i];
 			MAC_TABLE_ENTRY *mac = pp[i];
+			for (UINT j = 0;j < LIST_NUM(pp[i]->SessionGroup->SessionGroup);j++)
+			{
+				SESSION *s = LIST_DATA(pp[i]->SessionGroup->SessionGroup, j);
+				RPC_ENUM_MAC_TABLE_ITEM *e = &t->MacTables[tIndex++];
 
-			e->Key = POINTER_TO_KEY(mac);
-			StrCpy(e->SessionName, sizeof(e->SessionName), mac->Session->Name);
-			Copy(e->MacAddress, mac->MacAddress, sizeof(e->MacAddress));
-			e->CreatedTime = TickToTime(mac->CreatedTime);
-			e->UpdatedTime = TickToTime(mac->UpdatedTime);
-			e->VlanId = mac->VlanId;
+				e->Key = POINTER_TO_KEY(mac);
+				StrCpy(e->SessionName, sizeof(e->SessionName), s->Name);
+				Copy(e->MacAddress, mac->MacAddress, sizeof(e->MacAddress));
+				e->CreatedTime = TickToTime(mac->CreatedTime);
+				e->UpdatedTime = TickToTime(mac->UpdatedTime);
+				e->VlanId = mac->VlanId;
 
-			GetMachineName(e->RemoteHostname, sizeof(e->RemoteHostname));
+				GetMachineName(e->RemoteHostname, sizeof(e->RemoteHostname));
+			}
 		}
 
 		Free(pp);

@@ -5,6 +5,7 @@
 // Hub.c
 // Virtual HUB module
 
+#include <assert.h>
 #include "Hub.h"
 
 #include "Admin.h"
@@ -3429,7 +3430,7 @@ void HubPaFree(SESSION *s)
 		for (i = 0;i < num;i++)
 		{
 			MAC_TABLE_ENTRY *e = (MAC_TABLE_ENTRY *)pp[i];
-			if (e->Session == s)
+			if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
 			{
 				Add(o, e);
 			}
@@ -3437,8 +3438,12 @@ void HubPaFree(SESSION *s)
 		for (i = 0;i < LIST_NUM(o);i++)
 		{
 			MAC_TABLE_ENTRY *e = (MAC_TABLE_ENTRY *)LIST_DATA(o, i);
-			DeleteHash(hub->MacHashTable, e);
-			Free(e);
+			Delete(e->SessionGroup->SessionGroup, s);
+			if (0 == LIST_NUM(e->SessionGroup->SessionGroup))
+			{
+				DeleteHash(hub->MacHashTable, e);
+				Free(e);
+			}
 		}
 		ReleaseList(o);
 		Free(pp);
@@ -3449,7 +3454,7 @@ void HubPaFree(SESSION *s)
 		for (i = 0;i < num;i++)
 		{
 			IP_TABLE_ENTRY *e = LIST_DATA(hub->IpTable, i);
-			if (e->Session == s)
+			if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
 			{
 				Add(o, e);
 			}
@@ -3457,8 +3462,12 @@ void HubPaFree(SESSION *s)
 		for (i = 0;i < LIST_NUM(o);i++)
 		{
 			IP_TABLE_ENTRY *e = LIST_DATA(o, i);
-			Delete(hub->IpTable, e);
-			Free(e);
+			Delete(e->SessionGroup->SessionGroup, s);
+			if (0 == LIST_NUM(e->SessionGroup->SessionGroup))
+			{
+				Delete(hub->IpTable, e);
+				Free(e);
+			}
 		}
 		ReleaseList(o);
 	}
@@ -4087,7 +4096,7 @@ DISCARD_PACKET:
 							for (i = 0;i < num_pp;i++)
 							{
 								MAC_TABLE_ENTRY *e = pp[i];
-								if (e->Session == s)
+								if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
 								{
 									num_mac_for_me++;
 								}
@@ -4151,7 +4160,8 @@ DISCARD_PACKET:
 						{
 							entry->VlanId = 0;
 						}
-						entry->Session = s;
+
+						entry->SessionGroup = s->SessionGroup;
 						entry->UpdatedTime = entry->CreatedTime = now;
 
 						AddHash(hub->MacHashTable, entry);
@@ -4180,107 +4190,84 @@ DISCARD_PACKET:
 							}
 						}
 					}
+					else if (SearchPointer(entry->SessionGroup->SessionGroup, s) == s)
+					{
+						// Do not do anything because it is already registered
+						entry->UpdatedTime = now;
+					}
 					else
 					{
-						if (entry->Session == s)
-						{
-							// Do not do anything because it is already registered
-							entry->UpdatedTime = now;
-						}
-						else
-						{
-							// Read the value of the policy CheckMac
-							bool check_mac = s->Policy->CheckMac;
+						// Read the value of the policy CheckMac
+						bool check_mac = s->Policy->CheckMac;
 
-							if (check_mac == false)
+						if (check_mac == false && s->BridgeMode)
+						{
+							// Enable the CheckMac policy for the local bridge session forcibly
+							check_mac = true;
+
+							if (hub->Option != NULL && hub->Option->DisableCheckMacOnLocalBridge)
 							{
-								if (s->BridgeMode)
-								{
-									// Enable the CheckMac policy for the local bridge session forcibly
-									check_mac = true;
-
-									if (hub->Option != NULL && hub->Option->DisableCheckMacOnLocalBridge)
-									{
-										// Disable if DisableCheckMacOnLocalBridge option is set
-										check_mac = false;
-									}
-								}
+								// Disable if DisableCheckMacOnLocalBridge option is set
+								check_mac = false;
 							}
+						}
 
-							// It's already registered and it's in another session
-							if (check_mac && (Cmp(packet->MacAddressSrc, hub->HubMacAddr, 6) != 0) &&
-								((entry->UpdatedTime + MAC_TABLE_EXCLUSIVE_TIME) >= now))
+						// It's already registered and it's in another session
+						if (check_mac && (Cmp(packet->MacAddressSrc, hub->HubMacAddr, 6) != 0) &&
+							((entry->UpdatedTime + MAC_TABLE_EXCLUSIVE_TIME) >= now))
+						{
+							UCHAR *mac = packet->MacAddressSrc;
+							if (hub->Option != NULL && hub->Option->FixForDLinkBPDU &&
+								(mac[0] == 0x00 && mac[1] == 0x80 && mac[2] == 0xc8 && mac[3] == 0x00 && mac[4] == 0x00 && mac[5] == 0x00) ||
+								(mac[0] == 0x00 && mac[1] == 0x0d && mac[2] == 0x88 && mac[3] == 0x00 && mac[4] == 0x00 && mac[5] == 0x00))
 							{
-								UCHAR *mac = packet->MacAddressSrc;
-								if (hub->Option != NULL && hub->Option->FixForDLinkBPDU &&
-									(mac[0] == 0x00 && mac[1] == 0x80 && mac[2] == 0xc8 && mac[3] == 0x00 && mac[4] == 0x00 && mac[5] == 0x00) ||
-									(mac[0] == 0x00 && mac[1] == 0x0d && mac[2] == 0x88 && mac[3] == 0x00 && mac[4] == 0x00 && mac[5] == 0x00))
+								// Measures for D-Link. Spanning tree packet of D-Link is sent from the above address. 
+								//CheckMac options for the local bridge may cause an adverse effect. So process this exceptionally.
+								UCHAR hash[MD5_SIZE];
+								UINT64 tick_diff = Tick64() - s->LastDLinkSTPPacketSendTick;
+
+								Md5(hash, packet->PacketData, packet->PacketSize);
+
+								if ((s->LastDLinkSTPPacketSendTick != 0) &&
+									(tick_diff < 750ULL) &&
+									(Cmp(hash, s->LastDLinkSTPPacketDataHash, MD5_SIZE) == 0))
 								{
-									// Measures for D-Link. Spanning tree packet of D-Link is sent from the above address. 
-									//CheckMac options for the local bridge may cause an adverse effect. So process this exceptionally.
-									UCHAR hash[MD5_SIZE];
-									UINT64 tick_diff = Tick64() - s->LastDLinkSTPPacketSendTick;
-
-									Md5(hash, packet->PacketData, packet->PacketSize);
-
-									if ((s->LastDLinkSTPPacketSendTick != 0) &&
-										(tick_diff < 750ULL) &&
-										(Cmp(hash, s->LastDLinkSTPPacketDataHash, MD5_SIZE) == 0))
-									{
-										// Discard if the same packet sent before 750ms ago
-										Debug("D-Link Discard %u\n", (UINT)tick_diff);
-										goto DISCARD_PACKET;	// Drop the packet
-									}
-									else
-									{
-										goto UPDATE_FDB;
-									}
+									// Discard if the same packet sent before 750ms ago
+									Debug("D-Link Discard %u\n", (UINT)tick_diff);
+									goto DISCARD_PACKET;	// Drop the packet
 								}
 								else
 								{
-									if (0)
-									{
-										// If the CheckMac policy-enabled, owning same
-										// MAC address by other sessions are prohibited
-										// (If the second byte is 0xAE, don't perform this check)
-										char mac_address[32];
-										BinToStr(mac_address, sizeof(mac_address), packet->MacAddressSrc, 6);
-									}
+									goto UPDATE_FDB;
 								}
-
-								goto DISCARD_PACKET;	// Drop the packet
 							}
-							else
-							{
-								// Rewrite the session of MAC address table and the HUB_PA
-								char mac_address[32];
+
+							goto DISCARD_PACKET;	// Drop the packet
+						}
+						else
+						{
+							// Rewrite the session of MAC address table and the HUB_PA
+							char mac_address[32];
 UPDATE_FDB:
-								BinToStr(mac_address, sizeof(mac_address), packet->MacAddressSrc, 6);
+							BinToStr(mac_address, sizeof(mac_address), packet->MacAddressSrc, 6);
 
-								entry->Session = s;
-								entry->HubPa = (HUB_PA *)s->PacketAdapter->Param;
-								entry->UpdatedTime = entry->CreatedTime = now;
+							entry->SessionGroup = s->SessionGroup;
+							entry->HubPa = (HUB_PA *)s->PacketAdapter->Param;
+							entry->UpdatedTime = entry->CreatedTime = now;
 
-								if (1)
+							if (s != NULL)
+							{
+								if (no_heavy == false)
 								{
-									// Debug display
-									char mac_address[32];
-
-									if (s != NULL)
+									MacToStr(mac_address, sizeof(mac_address), packet->MacHeader->SrcAddress);
+									Debug("Register MAC Address %s to Session %X.\n", mac_address, s);
+									if (packet->VlanId == 0)
 									{
-										if (no_heavy == false)
-										{
-											MacToStr(mac_address, sizeof(mac_address), packet->MacHeader->SrcAddress);
-											Debug("Register MAC Address %s to Session %X.\n", mac_address, s);
-											if (packet->VlanId == 0)
-											{
-												HLog(hub, "LH_MAC_REGIST", s->Name, mac_address);
-											}
-											else
-											{
-												HLog(hub, "LH_MAC_REGIST_VLAN", s->Name, mac_address, packet->VlanId);
-											}
-										}
+										HLog(hub, "LH_MAC_REGIST", s->Name, mac_address);
+									}
+									else
+									{
+										HLog(hub, "LH_MAC_REGIST_VLAN", s->Name, mac_address, packet->VlanId);
 									}
 								}
 							}
@@ -4316,205 +4303,195 @@ UPDATE_FDB:
 						// Broadcast because the destination isn't found
 						broadcast_mode = true;
 					}
+					else if (NULL == SearchPointer(entry->SessionGroup->SessionGroup, s))
+					{
+						// Destination is found
+						dest_pa = entry->HubPa;
+						assert(LIST_NUM(entry->SessionGroup->SessionGroup) > 0);
+						dest_session = LIST_DATA(entry->SessionGroup->SessionGroup, 0);
+
+					}
 					else
 					{
-						if (entry->Session != s)
-						{
-							// Destination is found
-							dest_pa = entry->HubPa;
-							dest_session = entry->Session;
-						}
-						else
-						{
-							// Bad packet whose destination is its own
-							goto DISCARD_PACKET;
-						}
+						// Bad packet whose destination is its own
+						goto DISCARD_PACKET;
 					}
 				}
 
-				if (s != NULL && hub->Option->NoIpTable == false)
+				if (s != NULL && hub->Option->NoIpTable == false && packet->TypeL3 == L3_IPV6)
 				{
-					if (packet->TypeL3 == L3_IPV6)
+					// IPv6 packet
+					IP ip;
+					bool b = true;
+					UINT ip_type;
+					bool dhcp_or_ra = false;
+
+					IPv6AddrToIP(&ip, &packet->L3.IPv6Header->SrcAddress);
+					ip_type = GetIPv6AddrType(&packet->L3.IPv6Header->SrcAddress);
+
+					if (!(ip_type & IPV6_ADDR_UNICAST))
 					{
-						// IPv6 packet
-						IP ip;
-						bool b = true;
-						UINT ip_type;
-						bool dhcp_or_ra = false;
+						// Multicast address
+						b = false;
+					}
+					else if ((ip_type & IPV6_ADDR_LOOPBACK) || (ip_type & IPV6_ADDR_ZERO))
+					{
+						// Loop-back address or all-zero address
+						b = false;
+					}
 
-						IPv6AddrToIP(&ip, &packet->L3.IPv6Header->SrcAddress);
-						ip_type = GetIPv6AddrType(&packet->L3.IPv6Header->SrcAddress);
-
-						if (!(ip_type & IPV6_ADDR_UNICAST))
+					if (packet->TypeL4 == L4_ICMPV6)
+					{
+						if (packet->ICMPv6HeaderPacketInfo.Type == 133 ||
+							packet->ICMPv6HeaderPacketInfo.Type == 134)
 						{
-							// Multicast address
-							b = false;
+							// ICMPv6 RS/RA
+							dhcp_or_ra = true;
 						}
-						else if ((ip_type & IPV6_ADDR_LOOPBACK) || (ip_type & IPV6_ADDR_ZERO))
+					}
+					else if (packet->TypeL4 == L4_UDP)
+					{
+						if (Endian16(packet->L4.UDPHeader->DstPort) == 546 ||
+							Endian16(packet->L4.UDPHeader->DstPort) == 547)
 						{
-							// Loop-back address or all-zero address
-							b = false;
+							// DHCPv6
+							dhcp_or_ra = true;
 						}
+					}
 
-						if (packet->TypeL4 == L4_ICMPV6)
+					if (IsHubMacAddress(packet->MacAddressSrc) &&
+						IsHubIpAddress64(&packet->L3.IPv6Header->SrcAddress))
+					{
+						// The source address of the Virtual HUB for polling
+						b = false;
+					}
+
+					if (b)
+					{
+						// Other than ICMPv6 RS/RA nor DHCPv6 packet
+						IP_TABLE_ENTRY t, *e;
+
+						Copy(&t.Ip, &ip, sizeof(IP));
+
+						// Check whether it is registered to an existing table
+						e = Search(hub->IpTable, &t);
+
+						if (e == NULL)
 						{
-							if (packet->ICMPv6HeaderPacketInfo.Type == 133 ||
-								packet->ICMPv6HeaderPacketInfo.Type == 134)
+							// Register since it is not registered
+							if (s->Policy->NoRoutingV6 || s->Policy->MaxIPv6 != 0)
 							{
-								// ICMPv6 RS/RA
-								dhcp_or_ra = true;
-							}
-						}
-						else if (packet->TypeL4 == L4_UDP)
-						{
-							if (Endian16(packet->L4.UDPHeader->DstPort) == 546 ||
-								Endian16(packet->L4.UDPHeader->DstPort) == 547)
-							{
-								// DHCPv6
-								dhcp_or_ra = true;
-							}
-						}
+								UINT i, num_ip_for_me = 0;
+								UINT limited_count = 0xffffffff;
 
-						if (IsHubMacAddress(packet->MacAddressSrc) &&
-							IsHubIpAddress64(&packet->L3.IPv6Header->SrcAddress))
-						{
-							// The source address of the Virtual HUB for polling
-							b = false;
-						}
-
-						if (b)
-						{
-							// Other than ICMPv6 RS/RA nor DHCPv6 packet
-							IP_TABLE_ENTRY t, *e;
-
-							Copy(&t.Ip, &ip, sizeof(IP));
-
-							// Check whether it is registered to an existing table
-							e = Search(hub->IpTable, &t);
-
-							if (e == NULL)
-							{
-								// Register since it is not registered
-								if (s->Policy->NoRoutingV6 || s->Policy->MaxIPv6 != 0)
+								for (i = 0;i < LIST_NUM(hub->IpTable);i++)
 								{
-									UINT i, num_ip_for_me = 0;
-									UINT limited_count = 0xffffffff;
+									IP_TABLE_ENTRY *e = LIST_DATA(hub->IpTable, i);
 
-									for (i = 0;i < LIST_NUM(hub->IpTable);i++)
+									if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
 									{
-										IP_TABLE_ENTRY *e = LIST_DATA(hub->IpTable, i);
-
-										if (e->Session == s)
+										if (IsIP6(&e->Ip))
 										{
-											if (IsIP6(&e->Ip))
-											{
-												num_ip_for_me++;
-											}
+											num_ip_for_me++;
 										}
-									}
-
-									if (s->Policy->NoRoutingV6)
-									{
-										limited_count = MIN(limited_count, IP_LIMIT_WHEN_NO_ROUTING_V6);
-									}
-									if (s->Policy->MaxIPv6 != 0)
-									{
-										limited_count = MIN(limited_count, s->Policy->MaxIPv6);
-									}
-									limited_count = MAX(limited_count, IP_MIN_LIMIT_COUNT_V6);
-
-									if (dhcp_or_ra)
-									{
-										limited_count = 0xffffffff;
-									}
-
-									if (num_ip_for_me >= limited_count)
-									{
-										// Discard the packet because it exceeded the
-										// upper limit of the IP address that can be used
-										char tmp[64];
-										IPToStr(tmp, sizeof(tmp), &ip);
-										if (s->Policy->NoRoutingV6 == false)
-										{
-											if (no_heavy == false)
-											{
-												HLog(hub, "LH_IP_LIMIT", s->Name, tmp, num_ip_for_me, limited_count);
-											}
-										}
-										else
-										{
-											if (no_heavy == false)
-											{
-												HLog(hub, "LH_ROUTING_LIMIT", s->Name, tmp, num_ip_for_me, limited_count);
-											}
-										}
-										goto DISCARD_PACKET;
 									}
 								}
 
-								if (IsIPManagementTargetForHUB(&ip, hub))
+								if (s->Policy->NoRoutingV6)
 								{
-									// Create a entry
-									e = ZeroMalloc(sizeof(IP_TABLE_ENTRY));
-									e->CreatedTime = e->UpdatedTime = now;
-									e->DhcpAllocated = false;
-									Copy(&e->Ip, &ip, sizeof(IP));
-									Copy(e->MacAddress, packet->MacAddressSrc, 6);
-									e->Session = s;
-
-									DeleteExpiredIpTableEntry(hub->IpTable);
-
-									if (LIST_NUM(hub->IpTable) >= MAX_IP_TABLES)
-									{
-										// Delete old IP table entries
-										DeleteOldIpTableEntry(hub->IpTable);
-									}
-
-									Insert(hub->IpTable, e);
-
-									if (0)
-									{
-										char ip_address[64];
-										IPToStr(ip_address, sizeof(ip_address), &ip);
-										Debug("Registered IP Address %s to Session %X.\n",
-											ip_address, s);
-									}
+									limited_count = MIN(limited_count, IP_LIMIT_WHEN_NO_ROUTING_V6);
 								}
-							}
-							else
-							{
-								if (e->Session == s)
+								if (s->Policy->MaxIPv6 != 0)
 								{
-									// Do not do anything because it is self session
-									// Renew updated time
-									e->UpdatedTime = now;
-									Copy(e->MacAddress, packet->MacAddressSrc, 6);
+									limited_count = MIN(limited_count, s->Policy->MaxIPv6);
 								}
-								else
+								limited_count = MAX(limited_count, IP_MIN_LIMIT_COUNT_V6);
+
+								if (dhcp_or_ra)
 								{
-									// Another session was using this IP address before
-									if ((s->Policy->CheckIPv6) &&
-										((e->UpdatedTime + IP_TABLE_EXCLUSIVE_TIME) >= now))
+									limited_count = 0xffffffff;
+								}
+
+								if (num_ip_for_me >= limited_count)
+								{
+									// Discard the packet because it exceeded the
+									// upper limit of the IP address that can be used
+									char tmp[64];
+									IPToStr(tmp, sizeof(tmp), &ip);
+									if (s->Policy->NoRoutingV6 == false)
 									{
-										// Discard the packet because another session uses this IP address
-										char ip_address[32];
-										char mac_str[48];
-										IPToStr(ip_address, sizeof(ip_address), &ip);
-
-										Debug("IP Address %s is Already used by Session %X.\n",
-											ip_address, s);
-
-										MacToStr(mac_str, sizeof(mac_str), e->MacAddress);
-
 										if (no_heavy == false)
 										{
-											HLog(hub, "LH_IP_CONFLICT", s->Name, ip_address, e->Session->Name, mac_str,
-												e->CreatedTime, e->UpdatedTime, e->DhcpAllocated, now);
+											HLog(hub, "LH_IP_LIMIT", s->Name, tmp, num_ip_for_me, limited_count);
 										}
+									}
+									else
+									{
+										if (no_heavy == false)
+										{
+											HLog(hub, "LH_ROUTING_LIMIT", s->Name, tmp, num_ip_for_me, limited_count);
+										}
+									}
+									goto DISCARD_PACKET;
+								}
+							}
 
-										goto DISCARD_PACKET;
+							if (IsIPManagementTargetForHUB(&ip, hub))
+							{
+								// Create a entry
+								e = ZeroMalloc(sizeof(IP_TABLE_ENTRY));
+								e->CreatedTime = e->UpdatedTime = now;
+								e->DhcpAllocated = false;
+								Copy(&e->Ip, &ip, sizeof(IP));
+								Copy(e->MacAddress, packet->MacAddressSrc, 6);
+								e->SessionGroup = s->SessionGroup;
+
+								DeleteExpiredIpTableEntry(hub->IpTable);
+
+								if (LIST_NUM(hub->IpTable) >= MAX_IP_TABLES)
+								{
+									// Delete old IP table entries
+									DeleteOldIpTableEntry(hub->IpTable);
+								}
+
+								Insert(hub->IpTable, e);
+
+							}
+						}
+						else if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
+						{
+							// Do not do anything because it is self session
+							// Renew updated time
+							e->UpdatedTime = now;
+							Copy(e->MacAddress, packet->MacAddressSrc, 6);
+						}
+						else
+						{
+							// Another session was using this IP address before
+							if ((s->Policy->CheckIPv6) &&
+								((e->UpdatedTime + IP_TABLE_EXCLUSIVE_TIME) >= now))
+							{
+								// Discard the packet because another session uses this IP address
+								char ip_address[32];
+								char mac_str[48];
+								IPToStr(ip_address, sizeof(ip_address), &ip);
+
+								Debug("IP Address %s is Already used by Session %X.\n",
+									ip_address, s);
+
+								MacToStr(mac_str, sizeof(mac_str), e->MacAddress);
+
+								if (no_heavy == false)
+								{
+									for (UINT i = 0;i < LIST_NUM(e->SessionGroup->SessionGroup);i++)
+									{
+										SESSION *session = LIST_DATA(e->SessionGroup->SessionGroup, i);
+										HLog(hub, "LH_IP_CONFLICT", s->Name, ip_address, session->Name, mac_str,
+											e->CreatedTime, e->UpdatedTime, e->DhcpAllocated, now);
 									}
 								}
+
+								goto DISCARD_PACKET;
 							}
 						}
 					}
@@ -4585,7 +4562,7 @@ UPDATE_FDB:
 									{
 										IP_TABLE_ENTRY *e = LIST_DATA(hub->IpTable, i);
 
-										if (e->Session == s)
+										if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
 										{
 											if (IsIP4(&e->Ip))
 											{
@@ -4636,7 +4613,7 @@ UPDATE_FDB:
 									e->DhcpAllocated = false;
 									Copy(&e->Ip, &ip, sizeof(IP));
 									Copy(e->MacAddress, packet->MacAddressSrc, 6);
-									e->Session = s;
+									e->SessionGroup = s->SessionGroup;
 
 									DeleteExpiredIpTableEntry(hub->IpTable);
 
@@ -4658,63 +4635,63 @@ UPDATE_FDB:
 								}
 							}
 						}
+						else if (SearchPointer(e->SessionGroup->SessionGroup, s) == s)
+						{
+							// Do not do anything because it is self session
+							// Renew update time
+							e->UpdatedTime = now;
+							Copy(e->MacAddress, packet->MacAddressSrc, 6);
+						}
 						else
 						{
-							if (e->Session == s)
+							// Another session was using this IP address before
+							if ((s->Policy->CheckIP || s->Policy->DHCPForce) &&
+								((e->UpdatedTime + IP_TABLE_EXCLUSIVE_TIME) >= now))
 							{
-								// Do not do anything because it is self session
-								// Renew update time
-								e->UpdatedTime = now;
-								Copy(e->MacAddress, packet->MacAddressSrc, 6);
-							}
-							else
-							{
-								// Another session was using this IP address before
-								if ((s->Policy->CheckIP || s->Policy->DHCPForce) &&
-									((e->UpdatedTime + IP_TABLE_EXCLUSIVE_TIME) >= now))
+								// Discard the packet because another session uses
+								// this IP address
+								char ip_address[32];
+								char mac_str[48];
+								IPToStr(ip_address, sizeof(ip_address), &ip);
+
+								Debug("IP Address %s is Already used by Session %X.\n", ip_address, s);
+
+								MacToStr(mac_str, sizeof(mac_str), e->MacAddress);
+
+								if (no_heavy == false)
 								{
-									// Discard the packet because another session uses
-									// this IP address
-									char ip_address[32];
-									char mac_str[48];
-									IPToStr(ip_address, sizeof(ip_address), &ip);
-
-									Debug("IP Address %s is Already used by Session %X.\n",
-										ip_address, s);
-
-									MacToStr(mac_str, sizeof(mac_str), e->MacAddress);
-
-									if (no_heavy == false)
+									for (UINT i = 0;i < LIST_NUM(e->SessionGroup->SessionGroup);i++)
 									{
-										HLog(hub, "LH_IP_CONFLICT", s->Name, ip_address, e->Session->Name, mac_str,
+										SESSION *session = LIST_DATA(e->SessionGroup->SessionGroup, i);
+										HLog(hub, "LH_IP_CONFLICT", s->Name, ip_address, session->Name, mac_str,
 											e->CreatedTime, e->UpdatedTime, e->DhcpAllocated, now);
 									}
+								}
 
+								goto DISCARD_PACKET;
+							}
+
+							if (s->Policy->DHCPForce)
+							{
+								if (e->DhcpAllocated == false)
+								{
+									char ipstr[MAX_SIZE];
+
+									// Discard the packet because this IP address
+									// isn't assigned by the DHCP server
+									IPToStr32(ipstr, sizeof(ipstr), uint_ip);
+									if (no_heavy == false)
+									{
+										HLog(hub, "LH_DHCP_FORCE", s->Name, ipstr);
+									}
 									goto DISCARD_PACKET;
 								}
-
-								if (s->Policy->DHCPForce)
-								{
-									if (e->DhcpAllocated == false)
-									{
-										char ipstr[MAX_SIZE];
-
-										// Discard the packet because this IP address
-										// isn't assigned by the DHCP server
-										IPToStr32(ipstr, sizeof(ipstr), uint_ip);
-										if (no_heavy == false)
-										{
-											HLog(hub, "LH_DHCP_FORCE", s->Name, ipstr);
-										}
-										goto DISCARD_PACKET;
-									}
-								}
-
-								// Overwrite the entry
-								e->Session = s;
-								e->UpdatedTime = now;
-								Copy(e->MacAddress, packet->MacAddressSrc, 6);
 							}
+
+							// Overwrite the entry
+							e->SessionGroup = s->SessionGroup;
+							e->UpdatedTime = now;
+							Copy(e->MacAddress, packet->MacAddressSrc, 6);
 						}
 					}
 				}
@@ -5769,7 +5746,7 @@ UPDATE_DHCP_ALLOC_ENTRY:
 								e->CreatedTime = e->UpdatedTime = Tick64();
 								e->DhcpAllocated = true;
 								Copy(&e->Ip, &ip, sizeof(IP));
-								e->Session = mac_table->Session;
+								e->SessionGroup = mac_table->SessionGroup;
 								Copy(e->MacAddress, p->MacAddressDest, 6);
 
 								if (new_entry)
@@ -5784,7 +5761,7 @@ UPDATE_DHCP_ALLOC_ENTRY:
 									Insert(hub->IpTable, e);
 
 								
-									if ((hub->Option != NULL && hub->Option->NoDhcpPacketLogOutsideHub == false) || mac_table->Session != s)
+									if ((hub->Option != NULL && hub->Option->NoDhcpPacketLogOutsideHub == false) || NULL == SearchPointer(mac_table->SessionGroup->SessionGroup, s))
 									{
 										char dhcp_mac_addr[64];
 										char dest_mac_addr[64];
@@ -5799,8 +5776,12 @@ UPDATE_DHCP_ALLOC_ENTRY:
 
 										if (no_heavy == false)
 										{
-											HLog(s->Hub, "LH_REGIST_DHCP", s->Name, dhcp_mac_addr, server_ip_addr,
-												mac_table->Session->Name, dest_mac_addr, dest_ip_addr);
+											for (UINT i = 0;i < LIST_NUM(mac_table->SessionGroup->SessionGroup);i++)
+											{
+												SESSION *session = LIST_DATA(mac_table->SessionGroup->SessionGroup, i);
+												HLog(s->Hub, "LH_REGIST_DHCP", s->Name, dhcp_mac_addr, server_ip_addr,
+													s->Name, dest_mac_addr, dest_ip_addr);
+											}
 										}
 									}
 								}
@@ -6095,6 +6076,9 @@ void AddSession(HUB *h, SESSION *s)
 		return;
 	}
 
+	s->SessionGroup = NewSessionGroup();
+	Add(s->SessionGroup->SessionGroup, s);
+
 	LockList(h->SessionList);
 	{
 		Insert(h->SessionList, s);
@@ -6104,6 +6088,55 @@ void AddSession(HUB *h, SESSION *s)
 		if (s->InProcMode)
 		{
 			s->UniqueId = GetNewUniqueId(h);
+		}
+	}
+	UnlockList(h->SessionList);
+}
+
+// Add a SESSION to the HUB
+void AddSessionEx(HUB *h, const char *old, SESSION *new)
+{
+	// Validate arguments
+	if (h == NULL || old == NULL || new == NULL)
+	{
+		return;
+	}
+
+	if (NULL != new->SessionGroup)
+	{
+		ReleaseSessionGroup(new->SessionGroup);
+		new->SessionGroup = NULL;
+	}
+
+	LockList(h->SessionList);
+	{
+		bool found = false;
+		for (UINT i = 0;i < LIST_NUM(h->SessionList);i++)
+		{
+			SESSION *s = LIST_DATA(h->SessionList, i);
+			if (0 == StrCmp(old, s->Name))
+			{
+				found = true;
+				Add(s->SessionGroup->SessionGroup, new);
+				AddRef(s->SessionGroup->ref);
+				new->SessionGroup = s->SessionGroup;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			new->SessionGroup = NewSessionGroup();
+			Add(new->SessionGroup->SessionGroup, new);
+		}
+
+		Insert(h->SessionList, new);
+		AddRef(new->ref);
+		Debug("Session %s Inserted to %s.\n", new->Name, h->Name);
+
+		if (new->InProcMode)
+		{
+			new->UniqueId = GetNewUniqueId(h);
 		}
 	}
 	UnlockList(h->SessionList);
@@ -7250,5 +7283,3 @@ HUBDB *NewHubDb()
 
 	return d;
 }
-
-

@@ -274,6 +274,7 @@ void InitFifo();
 void SetFifoCurrentReallocMemSize(UINT size);
 
 void *Search(LIST *o, void *target);
+void *SearchPointer(const LIST *o, const void *target);
 void Sort(LIST *o);
 void Add(LIST *o, void *p);
 void AddDistinct(LIST *o, void *p);

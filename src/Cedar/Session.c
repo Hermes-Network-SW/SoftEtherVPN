@@ -1355,6 +1355,11 @@ void CleanupSession(SESSION *s)
 
 	ReleaseSharedBuffer(s->IpcSessionSharedBuffer);
 
+	if (s->SessionGroup != NULL)
+	{
+		ReleaseSessionGroup(s->SessionGroup);
+	}
+
 	Free(s);
 }
 
@@ -2543,4 +2548,23 @@ void ClearDHCPLeaseRecordForIPv4(SESSION *s, UINT static_ip)
 		Delete(v->DhcpLeaseList, d);
 	}
 	UnlockList( v->DhcpLeaseList);
+}
+
+SESSION_GROUP *NewSessionGroup()
+{
+	SESSION_GROUP *s = ZeroMalloc(sizeof(SESSION_GROUP));
+	s->ref = NewRef();
+	s->SessionGroup = NewList(NULL);
+	return s;
+}
+
+void ReleaseSessionGroup(SESSION_GROUP *s)
+{
+	if (s == NULL || Release(s->ref) > 0)
+	{
+		return;
+	}
+
+	ReleaseList(s->SessionGroup);
+	Free(s);
 }

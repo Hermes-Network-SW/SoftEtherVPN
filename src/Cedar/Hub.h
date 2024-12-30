@@ -191,7 +191,7 @@ struct MAC_TABLE_ENTRY
 	UCHAR MacAddress[6];				// MAC address
 	UCHAR Padding[2];
 	UINT VlanId;						// VLAN ID
-	SESSION *Session;					// Session
+	SESSION_GROUP *SessionGroup;					// Session Group
 	HUB_PA *HubPa;						// HUB packet adapter
 	UINT64 CreatedTime;					// Creation date and time
 	UINT64 UpdatedTime;					// Updating date
@@ -201,7 +201,7 @@ struct MAC_TABLE_ENTRY
 struct IP_TABLE_ENTRY
 {
 	IP Ip;								// IP address
-	SESSION *Session;					// Session
+	SESSION_GROUP *SessionGroup;					// Session Group
 	bool DhcpAllocated;					// Assigned by DHCP
 	UINT64 CreatedTime;					// Creation date and time
 	UINT64 UpdatedTime;					// Updating date
@@ -431,6 +431,7 @@ HUB *GetHub(CEDAR *cedar, char *name);
 bool IsHub(CEDAR *cedar, char *name);
 void StopHub(HUB *h);
 void AddSession(HUB *h, SESSION *s);
+void AddSessionEx(HUB *h, const char *old, SESSION *new);
 void DelSession(HUB *h, SESSION *s);
 SESSION *SearchSessionByUniqueId(HUB *h, UINT id);
 UINT GetNewUniqueId(HUB *h);

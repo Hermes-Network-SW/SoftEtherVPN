@@ -68,6 +68,12 @@ struct PACKET_ADAPTER
 // Packet Adapter IDs
 #define	PACKET_ADAPTER_ID_VLAN_WIN32		1
 
+// Session Group structure
+struct SESSION_GROUP
+{
+	REF *ref;						// Reference counter
+	LIST *SessionGroup;					// Session Group
+};
 
 // Session structure
 struct SESSION
@@ -231,6 +237,7 @@ struct SESSION
 
 	SHARED_BUFFER *IpcSessionSharedBuffer;	// A shared buffer between IPC and Session
 	IPC_SESSION_SHARED_BUFFER_DATA *IpcSessionShared;	// Shared data between IPC and Session
+	SESSION_GROUP *SessionGroup;
 };
 
 // Password dialog
@@ -345,7 +352,6 @@ UINT GetNextDelayedPacketTickDiff(SESSION *s);
 UINT PrepareDHCPRequestForStaticIPv4(SESSION *s, BLOCK *b);
 void ClearDHCPLeaseRecordForIPv4(SESSION *s, UINT static_ip);
 
+SESSION_GROUP *NewSessionGroup();
+void ReleaseSessionGroup(SESSION_GROUP *s);
 #endif	// SESSION_H
-
-
-
