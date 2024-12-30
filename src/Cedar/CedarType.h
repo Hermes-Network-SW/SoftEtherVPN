@@ -97,6 +97,7 @@ typedef struct CONNECTION CONNECTION;
 typedef struct NODE_INFO NODE_INFO;
 typedef struct PACKET_ADAPTER PACKET_ADAPTER;
 typedef struct SESSION SESSION;
+typedef struct SESSION_GROUP SESSION_GROUP;
 typedef struct UI_PASSWORD_DLG UI_PASSWORD_DLG;
 typedef struct UI_MSG_DLG UI_MSG_DLG;
 typedef struct UI_NICINFO UI_NICINFO;

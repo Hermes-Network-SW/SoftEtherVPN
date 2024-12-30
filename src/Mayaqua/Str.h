@@ -39,7 +39,7 @@ char ToLower(char c);
 char ToUpper(char c);
 void StrUpper(char *str);
 void StrLower(char *str);
-int StrCmp(char *str1, char *str2);
+int StrCmp(const char *str1, const char *str2);
 int StrCmpi(char *str1, char *str2);
 void FormatArgs(char *buf, UINT size, char *fmt, va_list args);
 void Format(char *buf, UINT size, char *fmt, ...);

@@ -1406,6 +1406,26 @@ void *Search(LIST *o, void *target)
 	}
 }
 
+// Search pointer in the list
+void *SearchPointer(const LIST *o, const void *target)
+{
+	// Validate arguments
+	if (o == NULL || target == NULL)
+	{
+		return NULL;
+	}
+
+	for (UINT i = 0;i < o->num_item ;i++)
+	{
+		if (target == o->p[i])
+		{
+			return target;
+		}
+	}
+
+	return NULL;
+}
+
 // Insert an item to the list
 void Insert(LIST *o, void *p)
 {
